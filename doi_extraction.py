@@ -1,5 +1,6 @@
 from crossref.restful import Works
 
+from dandi.dandiapi import DandiAPIClient
 from dandischema.models import (
     Person,
     Organization,
