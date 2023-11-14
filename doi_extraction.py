@@ -6,13 +6,11 @@ from dandischema.models import (
     Organization,
     Contributor,
     Affiliation,
-    ContactPoint
 )
-
-from pydantic import EmailStr, AnyHttpUrl
 
 import requests
 import re
+
 
 class DOIExtraction:
     def __init__(self, doi: str):
@@ -110,7 +108,7 @@ class DOIExtraction:
             email=email,
             url=url,
             roleName=role,
-            affiliation=affiliation,
+            affiliation=None if not affiliation else affiliation,
             includeInCitation=True
         )
         return person
@@ -151,12 +149,12 @@ class DOIExtraction:
             
             if isinstance(contributor, Person):
                 if contributor.identifier:
-                    persons_text += f"- {contributor.name} (https://orcid.org/{contributor.identifier}) ({contributor.email}) ({contributor.url}) ({contributor.affiliation})\n"
+                    persons_text += f"- {contributor.name}\n\t- ORCID: https://orcid.org/{contributor.identifier}\n\t- EMAIL: {contributor.email}\n\t- URL: {contributor.url}\n\t- AFFILIATIONS: {contributor.affiliation}\n\n"
                 else:
-                    persons_text += f"- {contributor.name}\n"
+                    persons_text += f"- {contributor.name}\n\n"
 
             elif isinstance(contributor, Organization):
-                organizations_text += f"- {contributor.name}\n"
+                organizations_text += f"- {contributor.name}\n\n"
             else:
                 continue
 
@@ -185,7 +183,6 @@ class DOIExtraction:
             email = email[0].get("email", None) if email and len(email) > 0 else None
             if email:
                 final_email: str = email
-                print(final_email)
             else:
                 final_email = None
 
