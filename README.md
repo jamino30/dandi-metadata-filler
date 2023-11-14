@@ -2,10 +2,13 @@
 
 ### Example
 
+Input:
 ```
 Enter a dandiset ID >> 000409/draft
 Enter a related DOI >> 10.1101/2020.01.17.909838
-
+```
+Output:
+```
 CONTRIBUTORS:
 Authors:
 - Aguillon-Rodriguez, Valeria
