@@ -9,7 +9,8 @@ from dandischema.models import (
     RoleType
 )
 
-from transformers import pipeline
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import create_extraction_chain
 
 import openai
 import requests
@@ -258,18 +259,18 @@ class DOIExtraction:
         {expert_prompt}
         Given a dataset title, description, DOI title, and abstract, your task is to succinctly discern the study target, encompassing both the overarching goal and specific questions. 
         In instances where any of the four components is missing/None, offer insights based on available information.
-        Present your response in a short and concise one-sentence format and ensure any important/subject-related keywords are present.
+        Present your response in a short and concise one-sentence format and ensure any essential subject or NER related keywords are present.
         Start all your responses with the following: The study target is to...
         """
 
         prompt = f"""
+        -----
         Dataset Title: {dandiset_title if dandiset_title else "None"}
-        
         Dataset Description: {dandiset_description if dandiset_description else "None"}
         -----
         Related DOI Title: {doi_title if doi_title else "None"}
-        
         Related DOI Abstract: {doi_abstract if doi_abstract else "None"}
+        -----
         """
 
         MODEL = "gpt-3.5-turbo"
@@ -298,9 +299,24 @@ class DOIExtraction:
         else:
             study_target = self.get_study_target()
         
-        keywords = study_target.split()
+        schema = {
+            "properties": {
+                "neurological": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords specifically related to general neurology terms",
+                }
+            },
+            "required": ["neurological"],
+        }
 
-        return keywords
+        llm = ChatOpenAI(
+            model="gpt-3.5-turbo",
+            temperature=0
+        )
+        chain = create_extraction_chain(schema, llm)
+        keywords = list(chain.run(study_target))
+        return keywords[0].get("neurological", None)
 
 
     def stringify_keywords(self):
@@ -315,6 +331,7 @@ class DOIExtraction:
         return text
     
 
+    # NOTE: may not be needed
     def get_references(self):
         """Related resources (relation: dcite:isDescribedBy)"""
         references = self.works["reference"]
@@ -326,7 +343,7 @@ class DOIExtraction:
         study_target = self.stringify_study_target()
         keywords = self.stringify_keywords()
 
-        return f"{contributors}\n{study_target}\n{keywords}"
+        return f"\n{contributors}\n{study_target}\n{keywords}"
 
 
     def get_title(self) -> str:
