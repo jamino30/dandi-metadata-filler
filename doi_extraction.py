@@ -6,10 +6,12 @@ from dandischema.models import (
     Organization,
     Contributor,
     Affiliation,
+    RoleType
 )
 
 import requests
 import re
+import concurrent.futures
 
 
 class DOIExtraction:
@@ -39,47 +41,56 @@ class DOIExtraction:
         """
         dandiset_contributors = []
 
-        for contributor in self.contributors:
-            affiliation = contributor.get("affiliation", None)
-            if affiliation == []:
-                affiliation = None
+        with concurrent.futures.ThreadPoolExecutor() as exec:
+            futures = []
+            for contributor in self.contributors:
+                futures.append(exec.submit(self.process_contributor, contributor))
 
-            if any(key in contributor for key in ["ORCID", "family", "given"]):
-                family_name = contributor.get("family", None)
-                given_name = contributor.get("given", None)
-                if not family_name or not given_name:
-                    name = None
-                else:
-                    name = f"{family_name.strip().title()}, {given_name.strip().title()}"
-
-                orcid = contributor.get("ORCID", None)
-                if orcid:
-                    orcid = orcid.split("/")[-1]
-                    email, url = self.get_info_from_orcid(orcid)
-                else:
-                    email, url = None, None
-                # person
-                schema: list[Person] = self.filled_person_schema(
-                    orcid=orcid,
-                    name=name,
-                    email=email,
-                    url=url,
-                    role=contributor.get("role", None),
-                    affiliation=contributor.get("affiliation", None),
-                )
-            else:
-                # organization
-                schema: list[Organization] = self.filled_organization_schema(
-                    ror=contributor.get("ROR", None),
-                    name=contributor.get("name", None),
-                    email=contributor.get("email", None),
-                    url=contributor.get("url", None),
-                    role=contributor.get("role", None),
-                    affiliation=contributor.get("affiliation", None),
-                )
-            dandiset_contributors.append(schema)
+            for future in concurrent.futures.as_completed(futures):
+                dandiset_contributors.append(future.result())
 
         return dandiset_contributors
+
+    def process_contributor(self, contributor):
+        affiliation = contributor.get("affiliation", None)
+        if affiliation == []:
+            affiliation = None
+
+        if any(key in contributor for key in ["ORCID", "family", "given"]):
+            family_name = contributor.get("family", None)
+            given_name = contributor.get("given", None)
+            if not family_name or not given_name:
+                name = None
+            else:
+                name = f"{family_name.strip().title()}, {given_name.strip().title()}"
+
+            orcid = contributor.get("ORCID", None)
+            if orcid:
+                orcid = orcid.split("/")[-1]
+                email, url = self.get_info_from_orcid(orcid)
+            else:
+                email, url = None, None
+            # person
+            schema: list[Person] = self.filled_person_schema(
+                orcid=orcid,
+                name=name,
+                email=email,
+                url=url,
+                role=contributor.get("role", None),
+                affiliation=contributor.get("affiliation", None),
+            )
+        else:
+            # organization
+            schema: list[Organization] = self.filled_organization_schema(
+                ror=contributor.get("ROR", None),
+                name=contributor.get("name", None),
+                email=contributor.get("email", None),
+                url=contributor.get("url", None),
+                role=contributor.get("role", None),
+                affiliation=contributor.get("affiliation", None),
+            )
+
+        return schema
 
 
     def filled_person_schema(
@@ -107,7 +118,7 @@ class DOIExtraction:
             name=name,
             email=email,
             url=url,
-            roleName=role,
+            roleName=[RoleType.Author], # default given to any author recognized in provided DOI
             affiliation=None if not affiliation else affiliation,
             includeInCitation=True
         )
