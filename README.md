@@ -1,2 +1,12 @@
-# dandi-metadata-filler
-Python script that takes in a DOI, file, or text and updates a corresponding Dandiset with relevant metadata
+# Dandiset Metadata 'Filler'
+
+**Input:**
+- DOI
+- Associated research papers
+- Dandiset ID
+
+
+**Output:**
+- Contributors (authors, organizations, sponsors)
+- Relevant keywords
+- Study target(s)
