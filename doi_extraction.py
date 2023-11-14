@@ -282,6 +282,7 @@ class DOIExtraction:
                 {"role": "user", "content": prompt}
             ],
             max_tokens=MAX_TOKENS,
+            temperature=0.0,
         )
         self.study_target = completion.choices[0].message.content
         return self.study_target
@@ -293,30 +294,38 @@ class DOIExtraction:
         return text
     
 
-    def get_keywords(self):
-        if self.study_target:
-            study_target = self.study_target
+    def get_keywords(self, study_target_test: str = None):
+        if study_target_test:
+            study_target = study_target_test
         else:
-            study_target = self.get_study_target()
-        
-        schema = {
-            "properties": {
-                "neurological": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords specifically related to general neurology terms",
-                }
-            },
-            "required": ["neurological"],
-        }
+            if self.study_target:
+                study_target = self.study_target
+            else:
+                study_target = self.get_study_target()
 
-        llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0
+        system_prompt = "You are a neuroscience expert and you are interested in extracting important/related entities from a study target text."
+        
+        prompt = f"""
+        Here is the study target (objective and/or question) for a given neurophysiological dataset:
+        {study_target}
+        -----
+        Analyze the study target and return a ranked list of the top 10 most relevant entities (or grouped entities) ordered from most relevant to least relevant.
+        If a word or noun does not seem related enough to be a entity, do not include it in the list.
+        The format of the output list should be the 10 entities in a one-row CSV (comma-separated values) format.
+        """
+
+        MODEL = "gpt-3.5-turbo"
+        completion = openai.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
         )
-        chain = create_extraction_chain(schema, llm)
-        keywords_extracted = list(chain.run(study_target))
-        keywords = keywords_extracted[0].get("neurological", None)
+
+        choices = completion.choices[0].message.content
+        keywords = choices.split(", ")
         return keywords
 
 
