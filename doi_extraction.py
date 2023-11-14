@@ -315,8 +315,9 @@ class DOIExtraction:
             temperature=0
         )
         chain = create_extraction_chain(schema, llm)
-        keywords = list(chain.run(study_target))
-        return keywords[0].get("neurological", None)
+        keywords_extracted = list(chain.run(study_target))
+        keywords = keywords_extracted[0].get("neurological", None)
+        return keywords
 
 
     def stringify_keywords(self):
