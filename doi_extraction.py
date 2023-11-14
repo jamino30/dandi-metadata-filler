@@ -5,10 +5,14 @@ from dandischema.models import (
     Person,
     Organization,
     Contributor,
-    Affiliation
+    Affiliation,
+    ContactPoint
 )
 
+from pydantic import EmailStr, AnyHttpUrl
+
 import requests
+import re
 
 class DOIExtraction:
     def __init__(self, doi: str):
@@ -53,7 +57,9 @@ class DOIExtraction:
                 orcid = contributor.get("ORCID", None)
                 if orcid:
                     orcid = orcid.split("/")[-1]
-                email, url = self.get_info_from_orcid(orcid)
+                    email, url = self.get_info_from_orcid(orcid)
+                else:
+                    email, url = None, None
                 # person
                 schema: list[Person] = self.filled_person_schema(
                     orcid=orcid,
@@ -97,15 +103,14 @@ class DOIExtraction:
                     name=aff.get("name", None)
                 )
             )
-
         person = Person(
             schemaKey="Person",
             identifier=orcid,
             name=name,
-            url=url,
             email=email,
+            url=url,
             roleName=role,
-            affiliation=affiliations,
+            affiliation=affiliation,
             includeInCitation=True
         )
         return person
@@ -146,7 +151,7 @@ class DOIExtraction:
             
             if isinstance(contributor, Person):
                 if contributor.identifier:
-                    persons_text += f"- {contributor.name} (https://orcid.org/{contributor.identifier}) ({contributor.email}) ({contributor.url})\n"
+                    persons_text += f"- {contributor.name} (https://orcid.org/{contributor.identifier}) ({contributor.email}) ({contributor.url}) ({contributor.affiliation})\n"
                 else:
                     persons_text += f"- {contributor.name}\n"
 
@@ -176,22 +181,23 @@ class DOIExtraction:
             data = response.json()
 
             emails = data.get("emails", None)
-            if emails:
-                email = data.get("email", None)
-                if email and len(email) > 0:
-                    final_email: str = email[0].strip()
-                else:
-                    final_email = None
+            email = emails.get("email", None) if emails else None
+            email = email[0].get("email", None) if email and len(email) > 0 else None
+            if email:
+                final_email: str = email
+                print(final_email)
             else:
                 final_email = None
 
             urls = data.get("researcher-urls", None)
-            if urls:
-                url = data.get("researcher-url", None)
-                if url and len(url) > 0:
-                    final_url: str = url[0].strip()
-                else:
-                    final_url = None
+            url = urls.get("researcher-url", None) if urls else None
+            url = url[0].get("url", None) if url and len(url) > 0 else None
+            if url and "value" in url:
+                final_url: str = url["value"]
+                if final_url.startswith("https://"):
+                    final_url = re.sub(r"https://", "http://", final_url)
+                elif not final_url.startswith("http://"):
+                    final_url = "http://" + final_url.strip()
             else:
                 final_url = None
 
