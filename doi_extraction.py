@@ -4,8 +4,11 @@ from dandi.dandiapi import DandiAPIClient
 from dandischema.models import (
     Person,
     Organization,
+    Contributor,
     Affiliation
 )
+
+import requests
 
 class DOIExtraction:
     def __init__(self, doi: str):
@@ -16,14 +19,22 @@ class DOIExtraction:
 
         self.contributors = self.works.get("author", [])
 
+        self.dandi_client = DandiAPIClient()
+
     def validate_doi(self, doi: str):
+        """Validate a DOI source is crossref."""
         try:
             works = Works().doi(doi=doi)
             return works
         except Exception:
             return None
     
-    def get_contributors(self):
+    def get_contributors(self) -> list[Contributor]:
+        """
+        Extract contributors for a specific DOI:
+        - Authors
+        - Organizations
+        """
         dandiset_contributors = []
 
         for contributor in self.contributors:
@@ -42,19 +53,19 @@ class DOIExtraction:
                 orcid = contributor.get("ORCID", None)
                 if orcid:
                     orcid = orcid.split("/")[-1]
-
+                email, url = self.get_info_from_orcid(orcid)
                 # person
-                schema = self.filled_person_schema(
+                schema: list[Person] = self.filled_person_schema(
                     orcid=orcid,
                     name=name,
-                    email=contributor.get("email", None), # NOTE: get from ORCID
-                    url=contributor.get("url", None),
+                    email=email,
+                    url=url,
                     role=contributor.get("role", None),
                     affiliation=contributor.get("affiliation", None),
                 )
             else:
                 # organization
-                schema = self.filled_organization_schema(
+                schema: list[Organization] = self.filled_organization_schema(
                     ror=contributor.get("ROR", None),
                     name=contributor.get("name", None),
                     email=contributor.get("email", None),
@@ -76,6 +87,7 @@ class DOIExtraction:
             role,
             affiliation,
     ):
+        """Return dandischema.models.Person contributor"""
         affiliations = []
         for aff in affiliation:
             affiliations.append(
@@ -106,8 +118,9 @@ class DOIExtraction:
             email,
             url,
             role,
-            affiliation # not used for dandischema.Organization
+            affiliation # not used for dandischema.models.Organization
     ):
+        """Return dandischema.models.Organization contributor"""
         organization = Organization(
             schemaKey="Organization",
             identifier=ror,
@@ -133,7 +146,7 @@ class DOIExtraction:
             
             if isinstance(contributor, Person):
                 if contributor.identifier:
-                    persons_text += f"- {contributor.name} (https://orcid.org/{contributor.identifier})\n"
+                    persons_text += f"- {contributor.name} (https://orcid.org/{contributor.identifier}) ({contributor.email}) ({contributor.url})\n"
                 else:
                     persons_text += f"- {contributor.name}\n"
 
@@ -149,6 +162,42 @@ class DOIExtraction:
 
         return text.format(persons_text, organizations_text)
 
+
+    def get_info_from_orcid(self, orcid: str):
+        if not orcid:
+            return None, None
+        
+        orcid_api_url = f"https://pub.orcid.org/v3.0/{orcid}/person"
+        headers = {"Accept": "application/json"}
+
+        response = requests.get(orcid_api_url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            emails = data.get("emails", None)
+            if emails:
+                email = data.get("email", None)
+                if email and len(email) > 0:
+                    final_email: str = email[0].strip()
+                else:
+                    final_email = None
+            else:
+                final_email = None
+
+            urls = data.get("researcher-urls", None)
+            if urls:
+                url = data.get("researcher-url", None)
+                if url and len(url) > 0:
+                    final_url: str = url[0].strip()
+                else:
+                    final_url = None
+            else:
+                final_url = None
+
+            return final_email, final_url
+        
+        return None, None
 
     def get_keywords_from_abstract(self):
         keywords = set()
@@ -166,6 +215,16 @@ class DOIExtraction:
             text += f"- {kw}\n"
 
         return text
+    
+
+    def get_references(self):
+        """Related resources (relation: dcite:isDescribedBy)"""
+        references = self.works["reference"]
+        return references
+    
+
+    def stringify_references(self):
+        pass
 
 
     def stringify(self):
@@ -185,9 +244,5 @@ class DOIExtraction:
 
     def get_subjects(self) -> list[str]:
         return self.works.get("subject", [])
-    
-    
-    def get_references(self):
-        return self.works["reference"]
 
 
