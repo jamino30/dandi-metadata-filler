@@ -9,9 +9,9 @@ def main():
     if "arxiv" in doi.lower():
         print("arXiv assigned DOI's are not supported.")
 
-    doi_extraction = DOIExtraction(doi=doi)
+    doi_extraction = DOIExtraction(doi=doi, dandiset_id=dandiset_id)
 
-    print(doi_extraction.stringify())
+    print(doi_extraction.get_keywords())
 
 if __name__ == "__main__":
     try:

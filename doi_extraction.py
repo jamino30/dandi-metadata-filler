@@ -9,21 +9,32 @@ from dandischema.models import (
     RoleType
 )
 
+from transformers import pipeline
+
+import openai
 import requests
 import re
 import concurrent.futures
+import os
 
 
 class DOIExtraction:
-    def __init__(self, doi: str):
+    def __init__(self, doi: str, dandiset_id: str):
         self.doi = doi.strip()
         self.works = self.validate_doi(self.doi)
         if not self.works:
             raise ValueError("Invalid DOI provided.")
 
-        self.contributors = self.works.get("author", [])
+        self.contributors = self.works.get("author", None)
 
         self.dandi_client = DandiAPIClient()
+        self.dandiset_id = self.validate_dandiset_id_format(dandiset_id.strip())
+        if not self.dandiset_id:
+            raise ValueError("Invalid Dandiset ID provided.")
+        
+        openai.api_key = os.environ.get("OPENAI_API_KEY", None)
+
+        self.study_target = None
 
     def validate_doi(self, doi: str):
         """Validate a DOI source is crossref."""
@@ -32,6 +43,13 @@ class DOIExtraction:
             return works
         except Exception:
             return None
+        
+    def validate_dandiset_id_format(self, dandiset_id: str):
+        """Validate a dandiset ID format is valid."""
+        if len(dandiset_id.split("/")) == 2:
+            return dandiset_id
+        else:
+            return None
     
     def get_contributors(self) -> list[Contributor]:
         """
@@ -39,6 +57,9 @@ class DOIExtraction:
         - Authors
         - Organizations
         """
+        if not self.contributors:
+            return None
+        
         dandiset_contributors = []
 
         with concurrent.futures.ThreadPoolExecutor() as exec:
@@ -160,12 +181,15 @@ class DOIExtraction:
             
             if isinstance(contributor, Person):
                 if contributor.identifier:
-                    persons_text += f"- {contributor.name}\n\t- ORCID: https://orcid.org/{contributor.identifier}\n\t- EMAIL: {contributor.email}\n\t- URL: {contributor.url}\n\t- AFFILIATIONS: {contributor.affiliation}\n\n"
+                    persons_text += f"- {contributor.name} (ORCID: https://orcid.org/{contributor.identifier}) (EMAIL: {contributor.email}) (URL: {contributor.url}) (AFFILIATIONS: {contributor.affiliation})\n"
                 else:
-                    persons_text += f"- {contributor.name}\n\n"
+                    persons_text += f"- {contributor.name}\n"
 
             elif isinstance(contributor, Organization):
-                organizations_text += f"- {contributor.name}\n\n"
+                if contributor.identifier:
+                    organizations_text += f"- {contributor.name} (ROR: https://ror.org/{contributor.identifier}) (EMAIL: {contributor.email}) (URL: {contributor.url})\n"
+                else:
+                    organizations_text += f"- {contributor.name}\n"
             else:
                 continue
 
@@ -213,20 +237,80 @@ class DOIExtraction:
         
         return None, None
 
-    def get_keywords_from_abstract(self):
-        keywords = set()
-        for subject in self.get_subjects():
-            keywords.add(subject.strip().lower())
-        return keywords
+    def get_study_target(self):
+        subjects = self.get_subjects()
+
+        ds_id, ds_version = self.dandiset_id.split("/")
+        dandiset = self.dandi_client.get_dandiset(ds_id, ds_version)
+        dandiset_metadata = dandiset.get_raw_metadata()
+        dandiset_title = dandiset_metadata.get("name", None)
+        dandiset_description = dandiset_metadata.get("description", None)
+        
+        doi_title = self.get_title()
+        doi_abstract = self.get_abstract()
+
+        if subjects and len(subjects) > 0:
+            expert_prompt = f"You are an expert in the following subjects: {', '.join(subjects)}"
+        else:
+            expert_prompt = ""
+
+        system_prompt = f"""
+        {expert_prompt}
+        Given a dataset title, description, DOI title, and abstract, your task is to succinctly discern the study target, encompassing both the overarching goal and specific questions. 
+        In instances where any of the four components is missing/None, offer insights based on available information.
+        Present your response in a short and concise one-sentence format and ensure any important/subject-related keywords are present.
+        Start all your responses with the following: The study target is to...
+        """
+
+        prompt = f"""
+        Dataset Title: {dandiset_title if dandiset_title else "None"}
+        
+        Dataset Description: {dandiset_description if dandiset_description else "None"}
+        -----
+        Related DOI Title: {doi_title if doi_title else "None"}
+        
+        Related DOI Abstract: {doi_abstract if doi_abstract else "None"}
+        """
+
+        MODEL = "gpt-3.5-turbo"
+        MAX_TOKENS = 100
+        completion = openai.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=MAX_TOKENS,
+        )
+        self.study_target = completion.choices[0].message.content
+        return self.study_target
     
 
+    def stringify_study_target(self):
+        study_target = self.get_study_target()
+        text = f"STUDY TARGET:\n{study_target}\n"
+        return text
+    
+
+    def get_keywords(self):
+        if self.study_target:
+            study_target = self.study_target
+        else:
+            study_target = self.get_study_target()
+        
+        keywords = study_target.split()
+
+        return keywords
+
+
     def stringify_keywords(self):
-        keywords = self.get_keywords_from_abstract()
+        keywords = self.get_keywords()
 
         text = "KEYWORDS:\n"
-
-        for kw in keywords:
-            text += f"- {kw}\n"
+        if keywords:
+            text += ", ".join(keywords)
+        else:
+            text += "None\n"
 
         return text
     
@@ -235,17 +319,14 @@ class DOIExtraction:
         """Related resources (relation: dcite:isDescribedBy)"""
         references = self.works["reference"]
         return references
-    
-
-    def stringify_references(self):
-        pass
 
 
     def stringify(self):
         contributors = self.stringify_contributors()
+        study_target = self.stringify_study_target()
         keywords = self.stringify_keywords()
 
-        return f"{contributors}\n{keywords}"
+        return f"{contributors}\n{study_target}\n{keywords}"
 
 
     def get_title(self) -> str:
@@ -257,6 +338,6 @@ class DOIExtraction:
     
 
     def get_subjects(self) -> list[str]:
-        return self.works.get("subject", [])
+        return self.works.get("subject", None)
 
 
