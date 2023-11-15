@@ -21,7 +21,7 @@ Related DOI Abstract: {}
 -----
 """
 
-# keyword extraction prompts
+# Keyword extraction prompts
 KEYWORDS_SYSTEM_PROMPT = "You are a neuroscience expert and you are interested in extracting important/related entities from a study target text."
 
 KEYWORDS_USER_PROMPT = """

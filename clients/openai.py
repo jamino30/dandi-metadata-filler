@@ -18,7 +18,7 @@ class OpenAIClient:
     def get_llm_response(self, system_prompt, user_prompt, model=None, **kwargs):
         try:
             completion = openai.chat.completions.create(
-                model=model if model in self.supported_models else self.default_model,
+                model=model if model and model in self.supported_models else self.default_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

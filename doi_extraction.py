@@ -9,8 +9,12 @@ from prompts import (
     KEYWORDS_USER_PROMPT
 )
 
-from keybert import KeyBERT
+from dandischema.models import (
+    Dandiset,
+    Contributor
+)
 
+from keybert import KeyBERT
 import concurrent.futures
 
 
@@ -36,6 +40,9 @@ class DOIExtraction:
         self.dandiset_metadata = self.dandi_client.get_raw_metadata(id, version)
         if not self.dandiset_metadata:
             raise ValueError("Invalid Dandiset ID provided.")
+        
+        self.dandiset_name = self.dandi_client.get_dandiset_name()
+        self.dandiset_description = self.dandi_client.get_dandiset_description()
 
         # OpenAI
         self.openai_client = OpenAIClient()
@@ -44,6 +51,7 @@ class DOIExtraction:
 
     
     def get_contributors(self):
+        """Return a list of dandischema.models.Contributor"""
         contributors = self.crossref_client.get_contributors()
         if not contributors:
             return None
@@ -100,9 +108,6 @@ class DOIExtraction:
 
     def get_study_target(self):
         subjects = self.crossref_client.get_subjects()
-
-        dandiset_name = self.dandi_client.get_dandiset_name()
-        dandiset_description = self.dandi_client.get_dandiset_description()
         
         doi_title = self.crossref_client.get_title()
         doi_abstract = self.crossref_client.get_abstract()
@@ -114,18 +119,16 @@ class DOIExtraction:
 
         user_prompt = STUDY_TARGET_USER_PROMPT.format(
             expert_prompt,
-            "None" if not dandiset_name else dandiset_name,
-            "None" if not dandiset_description else dandiset_description,
+            "None" if not self.dandiset_name else self.dandiset_name,
+            "None" if not self.dandiset_description else self.dandiset_description,
             "None" if not doi_title else doi_title,
             "None" if not doi_abstract else doi_abstract
         )
 
-        MODEL = "gpt-3.5-turbo"
         MAX_TOKENS = 100
         self.study_target = self.openai_client.get_llm_response(
             system_prompt=STUDY_TARGET_SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            model=MODEL,
             temperature=0.0,
             max_tokens=MAX_TOKENS
         )
@@ -171,24 +174,23 @@ class DOIExtraction:
             NUM_KEYWORDS
         )
 
-        MODEL = "gpt-3.5-turbo"
         choices = self.openai_client.get_llm_response(
             system_prompt=KEYWORDS_SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            model=MODEL,
             temperature=0.0,
         )
         keywords = choices.split(", ")
         return keywords
     
     
-    def create_dandiset_structure(self):
-        contributors = self.get_contributors()
-        study_target = self.get_study_target()
-        keywords = self.get_keywords()
-
+    def updated_dandiset_structure(self):
+        contributors: list[Contributor] = self.get_contributors()
+        study_target: list[str] = [self.get_study_target()]
+        keywords: list[str] = self.get_keywords(type="keybert")
+        
         return {
             "contributors": contributors,
             "study_target": study_target,
-            "keywords": keywords,
+            "keywords": keywords
         }
+        
