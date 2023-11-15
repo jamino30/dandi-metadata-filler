@@ -219,9 +219,14 @@ class DOIExtraction:
     
     def __str__(self):
         contributors: list[Contributor] = self.get_contributors()
-        study_target, keywords = self.get_study_target_and_keywords()
-        # study_target: list[str] = [self.get_study_target()]
-        # keywords: list[str] = self.get_keywords(type=self.keyword_extraction_type)
+
+        # use combined LLM approach for study target generation and keyword extraction
+        combined = True
+        if combined:
+            study_target, keywords = self.get_study_target_and_keywords()
+        else:
+            study_target: list[str] = [self.get_study_target()]
+            keywords: list[str] = self.get_keywords(type=self.keyword_extraction_type)
         
         return str({
             "contributors": contributors,
