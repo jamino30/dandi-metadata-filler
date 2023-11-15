@@ -9,12 +9,9 @@ from prompts import (
     KEYWORDS_USER_PROMPT
 )
 
-from dandischema.models import (
-    Dandiset,
-    Contributor
-)
-
+from dandischema.models import Contributor
 from keybert import KeyBERT
+
 import concurrent.futures
 
 
@@ -23,7 +20,7 @@ NUM_KEYWORDS = 10
 
 
 class DOIExtraction:
-    def __init__(self, doi: str, dandiset_id: str):
+    def __init__(self, doi: str, dandiset_id: str, keyword_extraction_type: str = "llm"):
         # Crossref
         self.doi = doi.strip()
         self.crossref_client = CrossRef()
@@ -48,6 +45,7 @@ class DOIExtraction:
         self.openai_client = OpenAIClient()
 
         self.study_target = None
+        self.keyword_extraction_type = keyword_extraction_type
 
     
     def get_contributors(self):
@@ -142,9 +140,9 @@ class DOIExtraction:
             study_target = self.study_target if self.study_target else self.get_study_target()
 
         if type == "keybert":
-            keywords = self.get_keywords_keybert(study_target)
+            keywords = self._get_keywords_keybert(study_target)
         elif type == "llm":
-            keywords = self.get_keywords_llm(study_target)
+            keywords = self._get_keywords_llm(study_target)
         else:
             print("Invalid keyword extraction type.")
             return None
@@ -152,7 +150,7 @@ class DOIExtraction:
         return keywords
     
 
-    def get_keywords_keybert(self, study_target: str):
+    def _get_keywords_keybert(self, study_target: str):
         kw_model = KeyBERT()
 
         stop_words = None
@@ -167,7 +165,7 @@ class DOIExtraction:
         return [kw[0] for kw in keywords]
 
 
-    def get_keywords_llm(self, study_target: str):
+    def _get_keywords_llm(self, study_target: str):
         user_prompt = KEYWORDS_USER_PROMPT.format(
             study_target,
             NUM_KEYWORDS,
@@ -183,14 +181,14 @@ class DOIExtraction:
         return keywords
     
     
-    def updated_dandiset_structure(self):
+    def __str__(self):
         contributors: list[Contributor] = self.get_contributors()
         study_target: list[str] = [self.get_study_target()]
-        keywords: list[str] = self.get_keywords(type="keybert")
+        keywords: list[str] = self.get_keywords(type=self.keyword_extraction_type)
         
-        return {
+        return str({
             "contributors": contributors,
             "study_target": study_target,
             "keywords": keywords
-        }
+        })
         
