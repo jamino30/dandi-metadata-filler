@@ -1,4 +1,4 @@
-from doi_extraction2 import DOIExtraction
+from doi_extraction import DOIExtraction
 
 import sys
 
