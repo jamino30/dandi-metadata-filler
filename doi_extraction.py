@@ -9,14 +9,19 @@ from dandischema.models import (
     RoleType
 )
 
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import create_extraction_chain
+from keybert import KeyBERT
+
+# from langchain.chat_models import ChatOpenAI
+# from langchain.chains import create_extraction_chain
 
 import openai
 import requests
 import re
 import concurrent.futures
 import os
+
+
+NUM_KEYWORDS = 10
 
 
 class DOIExtraction:
@@ -255,15 +260,14 @@ class DOIExtraction:
         else:
             expert_prompt = ""
 
-        system_prompt = f"""
+        system_prompt = "You are a neuroscience expert and you are interested in developing a study target (objective or specific questions of the study) for a given dataset."
+
+        prompt = f"""
         {expert_prompt}
         Given a dataset title, description, DOI title, and abstract, your task is to succinctly discern the study target, encompassing both the overarching goal and specific questions. 
         In instances where any of the four components is missing/None, offer insights based on available information.
         Present your response in a short and concise one-sentence format and ensure any essential subject or NER related keywords are present.
         Start all your responses with the following: The study target is to...
-        """
-
-        prompt = f"""
         -----
         Dataset Title: {dandiset_title if dandiset_title else "None"}
         Dataset Description: {dandiset_description if dandiset_description else "None"}
@@ -293,8 +297,8 @@ class DOIExtraction:
         text = f"STUDY TARGET:\n{study_target}\n"
         return text
     
-
-    def get_keywords(self, study_target_test: str = None):
+    
+    def get_keywords(self, study_target_test, type="keybert"):
         if study_target_test:
             study_target = study_target_test
         else:
@@ -303,15 +307,38 @@ class DOIExtraction:
             else:
                 study_target = self.get_study_target()
 
+        if type == "keybert":
+            keywords = self.get_keywords_keybert(study_target)
+        elif type == "llm":
+            keywords = self.get_keywords_llm(study_target)
+        else:
+            print("Invalid keyword extraction type.")
+            return None
+
+        return keywords
+
+
+    def get_keywords_keybert(self, study_target: str = None):
+        kw_model = KeyBERT()
+        keywords = kw_model.extract_keywords(
+            study_target,
+            keyphrase_ngram_range=(1, 4),
+            top_n=NUM_KEYWORDS,
+            stop_words=None,
+        )
+        return [kw[0] for kw in keywords]
+
+
+    def get_keywords_llm(self, study_target: str = None):
         system_prompt = "You are a neuroscience expert and you are interested in extracting important/related entities from a study target text."
         
         prompt = f"""
         Here is the study target (objective and/or question) for a given neurophysiological dataset:
         {study_target}
         -----
-        Analyze the study target and return a ranked list of the top 10 most relevant entities (or grouped entities) ordered from most relevant to least relevant.
+        Analyze the study target and return a ranked list of the top {NUM_KEYWORDS} most relevant entities (or grouped entities) ordered from most relevant to least relevant.
         If a word or noun does not seem related enough to be a entity, do not include it in the list.
-        The format of the output list should be the 10 entities in a one-row CSV (comma-separated values) format.
+        The format of the output list should be the {NUM_KEYWORDS} entities in a one-row CSV (comma-separated values) format.
         """
 
         MODEL = "gpt-3.5-turbo"
@@ -330,7 +357,7 @@ class DOIExtraction:
 
 
     def stringify_keywords(self):
-        keywords = self.get_keywords()
+        keywords = self.get_keywords_llm()
 
         text = "KEYWORDS:\n"
         if keywords:
