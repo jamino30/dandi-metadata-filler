@@ -1,256 +1,104 @@
-from crossref.restful import Works
-
-from dandi.dandiapi import DandiAPIClient
-from dandischema.models import (
-    Person,
-    Organization,
-    Contributor,
-    Affiliation,
-    RoleType
-)
+from clients.crossref import CrossRef
+from clients.dandi import DandiClient
+from clients.openai import OpenAIClient
 
 from keybert import KeyBERT
 
-# from langchain.chat_models import ChatOpenAI
-# from langchain.chains import create_extraction_chain
-
-import openai
-import requests
-import re
 import concurrent.futures
-import os
 
 
+# num of keywords to be extracted from DOI
 NUM_KEYWORDS = 10
 
 
 class DOIExtraction:
     def __init__(self, doi: str, dandiset_id: str):
+        # Crossref
         self.doi = doi.strip()
-        self.works = self.validate_doi(self.doi)
-        if not self.works:
+        self.crossref_client = CrossRef()
+        self.doi_metadata = self.crossref_client.get_doi_metadata(self.doi)
+        if not self.doi_metadata:
             raise ValueError("Invalid DOI provided.")
 
-        self.contributors = self.works.get("author", None)
-
-        self.dandi_client = DandiAPIClient()
-        self.dandiset_id = self.validate_dandiset_id_format(dandiset_id.strip())
-        if not self.dandiset_id:
+        # Dandi
+        self.dandiset_id = dandiset_id.strip()
+        if len(dandiset_id.split("/")) != 2:
             raise ValueError("Invalid Dandiset ID provided.")
-        
-        openai.api_key = os.environ.get("OPENAI_API_KEY", None)
+        self.dandi_client = DandiClient()
+        id, version = self.dandiset_id.split("/")
+        self.dandiset_metadata = self.dandi_client.get_raw_metadata(id, version)
+        if not self.dandiset_metadata:
+            raise ValueError("Invalid Dandiset ID provided.")
+
+        # OpenAI
+        self.openai_client = OpenAIClient()
 
         self.study_target = None
 
-    def validate_doi(self, doi: str):
-        """Validate a DOI source is crossref."""
-        try:
-            works = Works().doi(doi=doi)
-            return works
-        except Exception:
-            return None
-        
-    def validate_dandiset_id_format(self, dandiset_id: str):
-        """Validate a dandiset ID format is valid."""
-        if len(dandiset_id.split("/")) == 2:
-            return dandiset_id
-        else:
-            return None
     
-    def get_contributors(self) -> list[Contributor]:
-        """
-        Extract contributors for a specific DOI:
-        - Authors
-        - Organizations
-        """
-        if not self.contributors:
+    def get_contributors(self):
+        contributors = self.crossref_client.get_contributors()
+        if not contributors:
             return None
         
-        dandiset_contributors = []
-
+        dandischema_contributors = []
         with concurrent.futures.ThreadPoolExecutor() as exec:
             futures = []
-            for contributor in self.contributors:
-                futures.append(exec.submit(self.process_contributor, contributor))
+            for contributor in contributors:
+                futures.append(exec.submit(self._process_contributor, contributor))
 
             for future in concurrent.futures.as_completed(futures):
-                dandiset_contributors.append(future.result())
+                if future.result():
+                    dandischema_contributors.append(future.result())
 
-        return dandiset_contributors
+        return dandischema_contributors
+    
 
-    def process_contributor(self, contributor):
-        affiliation = contributor.get("affiliation", None)
-        if affiliation == []:
-            affiliation = None
-
+    def _process_contributor(self, contributor):
+        affiliations = self.crossref_client.get_author_affiliations(contributor)
+        
         if any(key in contributor for key in ["ORCID", "family", "given"]):
-            family_name = contributor.get("family", None)
-            given_name = contributor.get("given", None)
+            family_name, given_name = self.crossref_client.get_author_full_name(contributor)
             if not family_name or not given_name:
-                name = None
+                return None
             else:
                 name = f"{family_name.strip().title()}, {given_name.strip().title()}"
 
-            orcid = contributor.get("ORCID", None)
+            orcid = self.crossref_client.get_author_orcid(contributor)
             if orcid:
                 orcid = orcid.split("/")[-1]
-                email, url = self.get_info_from_orcid(orcid)
+                email, url = self.crossref_client.get_info_from_orcid(orcid)
             else:
                 email, url = None, None
+                
             # person
-            schema: list[Person] = self.filled_person_schema(
+            schema = self.dandi_client.filled_person_schema(
                 orcid=orcid,
                 name=name,
                 email=email,
                 url=url,
-                role=contributor.get("role", None),
-                affiliation=contributor.get("affiliation", None),
+                affiliation=affiliations,
             )
         else:
             # organization
-            schema: list[Organization] = self.filled_organization_schema(
-                ror=contributor.get("ROR", None),
+            schema = self.dandi_client.filled_organization_schema(
+                ror=None,
                 name=contributor.get("name", None),
-                email=contributor.get("email", None),
-                url=contributor.get("url", None),
-                role=contributor.get("role", None),
-                affiliation=contributor.get("affiliation", None),
+                email=None,
+                url=None,
+                role=None,
             )
-
         return schema
-
-
-    def filled_person_schema(
-            self,
-            orcid,
-            name,
-            email,
-            url,
-            role,
-            affiliation,
-    ):
-        """Return dandischema.models.Person contributor"""
-        affiliations = []
-        for aff in affiliation:
-            affiliations.append(
-                Affiliation(
-                    schemaKey="Affiliation",
-                    identifier=aff.get("id", None),
-                    name=aff.get("name", None)
-                )
-            )
-        person = Person(
-            schemaKey="Person",
-            identifier=orcid,
-            name=name,
-            email=email,
-            url=url,
-            roleName=[RoleType.Author], # default given to any author recognized in provided DOI
-            affiliation=None if not affiliation else affiliation,
-            includeInCitation=True
-        )
-        return person
-                
-
-    def filled_organization_schema(
-            self,
-            ror,
-            name,
-            email,
-            url,
-            role,
-            affiliation # not used for dandischema.models.Organization
-    ):
-        """Return dandischema.models.Organization contributor"""
-        organization = Organization(
-            schemaKey="Organization",
-            identifier=ror,
-            name=name,
-            url=url,
-            email=email,
-            roleName=role,
-            includeInCitation=True
-        )
-        return organization
-            
-
-    def stringify_contributors(self):
-        contributors = self.get_contributors()
-
-        text = "CONTRIBUTORS:\nAuthors:\n{}\nOrganizations:\n{}"
-
-        persons_text = ""
-        organizations_text = ""
-        for contributor in contributors:
-            if not contributor.name:
-                    continue
-            
-            if isinstance(contributor, Person):
-                if contributor.identifier:
-                    persons_text += f"- {contributor.name} (ORCID: https://orcid.org/{contributor.identifier}) (EMAIL: {contributor.email}) (URL: {contributor.url}) (AFFILIATIONS: {contributor.affiliation})\n"
-                else:
-                    persons_text += f"- {contributor.name}\n"
-
-            elif isinstance(contributor, Organization):
-                if contributor.identifier:
-                    organizations_text += f"- {contributor.name} (ROR: https://ror.org/{contributor.identifier}) (EMAIL: {contributor.email}) (URL: {contributor.url})\n"
-                else:
-                    organizations_text += f"- {contributor.name}\n"
-            else:
-                continue
-
-        if not persons_text:
-            persons_text = "None\n"
-        if not organizations_text:
-            organizations_text = "None\n"
-
-        return text.format(persons_text, organizations_text)
-
-
-    def get_info_from_orcid(self, orcid: str):
-        if not orcid:
-            return None, None
-        
-        orcid_api_url = f"https://pub.orcid.org/v3.0/{orcid}/person"
-        headers = {"Accept": "application/json"}
-
-        response = requests.get(orcid_api_url, headers=headers)
-
-        if response.status_code == 200:
-            data = response.json()
-
-            emails = data.get("emails", None)
-            email = emails.get("email", None) if emails else None
-            email = email[0].get("email", None) if email and len(email) > 0 else None
-            final_email = email if email else None
-
-            urls = data.get("researcher-urls", None)
-            url = urls.get("researcher-url", None) if urls else None
-            url = url[0].get("url", None) if url and len(url) > 0 else None
-            if url and "value" in url:
-                final_url: str = url["value"]
-                if final_url.startswith("https://"):
-                    final_url = re.sub(r"https://", "http://", final_url)
-                elif not final_url.startswith("http://"):
-                    final_url = "http://" + final_url.strip()
-            else:
-                final_url = None
-
-            return final_email, final_url
-        
-        return None, None
+    
 
     def get_study_target(self):
-        subjects = self.get_subjects()
+        subjects = self.crossref_client.get_subjects()
 
-        ds_id, ds_version = self.dandiset_id.split("/")
-        dandiset = self.dandi_client.get_dandiset(ds_id, ds_version)
-        dandiset_metadata = dandiset.get_raw_metadata()
-        dandiset_title = dandiset_metadata.get("name", None)
-        dandiset_description = dandiset_metadata.get("description", None)
+        dandiset_name = self.dandi_client.get_dandiset_name()
+        dandiset_description = self.dandi_client.get_dandiset_description()
         
-        doi_title = self.get_title()
-        doi_abstract = self.get_abstract()
+        doi_title = self.crossref_client.get_title()
+        doi_abstract = self.crossref_client.get_abstract()
 
         if subjects and len(subjects) > 0:
             expert_prompt = f"You are an expert in the following subjects: {', '.join(subjects)}"
@@ -266,7 +114,7 @@ class DOIExtraction:
         Present your response in a short and concise one-sentence format and ensure any essential subject or NER related keywords are present.
         Start all your responses with the following: The study target is to...
         -----
-        Dataset Title: {dandiset_title if dandiset_title else "None"}
+        Dataset Title: {dandiset_name if dandiset_name else "None"}
         Dataset Description: {dandiset_description if dandiset_description else "None"}
         -----
         Related DOI Title: {doi_title if doi_title else "None"}
@@ -276,25 +124,16 @@ class DOIExtraction:
 
         MODEL = "gpt-3.5-turbo"
         MAX_TOKENS = 100
-        completion = openai.chat.completions.create(
+        self.study_target = self.openai_client.get_llm_response(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
             model=MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=MAX_TOKENS,
             temperature=0.0,
+            max_tokens=MAX_TOKENS
         )
-        self.study_target = completion.choices[0].message.content
         return self.study_target
     
 
-    def stringify_study_target(self):
-        study_target = self.get_study_target()
-        text = f"STUDY TARGET:\n{study_target}\n"
-        return text
-    
-    
     def get_keywords(self, study_target_test: str = None, type="llm"):
         if study_target_test:
             study_target = study_target_test
@@ -310,7 +149,7 @@ class DOIExtraction:
             return None
 
         return keywords
-
+    
 
     def get_keywords_keybert(self, study_target: str):
         kw_model = KeyBERT()
@@ -340,51 +179,23 @@ class DOIExtraction:
         """
 
         MODEL = "gpt-3.5-turbo"
-        completion = openai.chat.completions.create(
+        choices = self.openai_client.get_llm_response(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
             model=MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
             temperature=0.0,
         )
-
-        choices = completion.choices[0].message.content
         keywords = choices.split(", ")
         return keywords
-
-
-    def stringify_keywords(self):
+    
+    
+    def create_dandiset_structure(self):
+        contributors = self.get_contributors()
+        study_target = self.get_study_target()
         keywords = self.get_keywords()
-        text = "KEYWORDS:\n"
-        text += ", ".join(keywords) if keywords else "None\n"
-        return text
-    
 
-    # NOTE: may not be needed
-    def get_references(self):
-        """Related resources (relation: dcite:isDescribedBy)"""
-        references = self.works["reference"]
-        return references
-
-
-    def stringify(self):
-        contributors = self.stringify_contributors()
-        study_target = self.stringify_study_target()
-        keywords = self.stringify_keywords()
-
-        return f"\n{contributors}\n{study_target}\n{keywords}"
-
-
-    def get_title(self) -> str:
-        return self.works.get("title", None)
-    
-
-    def get_abstract(self) -> str:
-        return self.works.get("abstract", None)
-    
-
-    def get_subjects(self) -> list[str]:
-        return self.works.get("subject", None)
-
-
+        return {
+            "contributors": contributors,
+            "study_target": study_target,
+            "keywords": keywords,
+        }
