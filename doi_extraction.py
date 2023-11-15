@@ -222,10 +222,7 @@ class DOIExtraction:
             emails = data.get("emails", None)
             email = emails.get("email", None) if emails else None
             email = email[0].get("email", None) if email and len(email) > 0 else None
-            if email:
-                final_email: str = email
-            else:
-                final_email = None
+            final_email = email if email else None
 
             urls = data.get("researcher-urls", None)
             url = urls.get("researcher-url", None) if urls else None
@@ -298,14 +295,11 @@ class DOIExtraction:
         return text
     
     
-    def get_keywords(self, study_target_test, type="keybert"):
+    def get_keywords(self, study_target_test: str = None, type="llm"):
         if study_target_test:
             study_target = study_target_test
         else:
-            if self.study_target:
-                study_target = self.study_target
-            else:
-                study_target = self.get_study_target()
+            study_target = self.study_target if self.study_target else self.get_study_target()
 
         if type == "keybert":
             keywords = self.get_keywords_keybert(study_target)
@@ -318,18 +312,22 @@ class DOIExtraction:
         return keywords
 
 
-    def get_keywords_keybert(self, study_target: str = None):
+    def get_keywords_keybert(self, study_target: str):
         kw_model = KeyBERT()
+
+        stop_words = None
+
         keywords = kw_model.extract_keywords(
             study_target,
-            keyphrase_ngram_range=(1, 4),
+            keyphrase_ngram_range=(1, 2),
             top_n=NUM_KEYWORDS,
-            stop_words=None,
+            diversity=0.7,
+            stop_words=stop_words,
         )
         return [kw[0] for kw in keywords]
 
 
-    def get_keywords_llm(self, study_target: str = None):
+    def get_keywords_llm(self, study_target: str):
         system_prompt = "You are a neuroscience expert and you are interested in extracting important/related entities from a study target text."
         
         prompt = f"""
@@ -337,8 +335,8 @@ class DOIExtraction:
         {study_target}
         -----
         Analyze the study target and return a ranked list of the top {NUM_KEYWORDS} most relevant entities (or grouped entities) ordered from most relevant to least relevant.
-        If a word or noun does not seem related enough to be a entity, do not include it in the list.
-        The format of the output list should be the {NUM_KEYWORDS} entities in a one-row CSV (comma-separated values) format.
+        If a word or noun does not seem related enough to be a entity, do NOT include it in the list.
+        The format of the output list should be the {NUM_KEYWORDS} entities in a SINGLE-row CSV (comma-separated values) format.
         """
 
         MODEL = "gpt-3.5-turbo"
@@ -357,14 +355,9 @@ class DOIExtraction:
 
 
     def stringify_keywords(self):
-        keywords = self.get_keywords_llm()
-
+        keywords = self.get_keywords()
         text = "KEYWORDS:\n"
-        if keywords:
-            text += ", ".join(keywords)
-        else:
-            text += "None\n"
-
+        text += ", ".join(keywords) if keywords else "None\n"
         return text
     
 
