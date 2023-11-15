@@ -6,13 +6,16 @@ from prompts import (
     STUDY_TARGET_SYSTEM_PROMPT,
     STUDY_TARGET_USER_PROMPT,
     KEYWORDS_SYSTEM_PROMPT,
-    KEYWORDS_USER_PROMPT
+    KEYWORDS_USER_PROMPT,
+    STUDY_TARGET_AND_KEYWORD_SYSTEM_PROMPT,
+    STUDY_TARGET_AND_KEYWORD_USER_PROMPT
 )
 
 from dandischema.models import Contributor
 from keybert import KeyBERT
 
 import concurrent.futures
+import json
 
 
 # num of keywords to be extracted from DOI
@@ -104,6 +107,39 @@ class DOIExtraction:
         return schema
     
 
+    # NOTE: testing approach to combine study target and keywords
+    def get_study_target_and_keywords(self) -> (str, list[str]):
+        subjects = self.crossref_client.get_subjects()
+
+        doi_title = self.crossref_client.get_title()
+        doi_abstract = self.crossref_client.get_abstract()
+
+        if subjects and len(subjects) > 0:
+            expert_prompt = f"(specicially in {', '.join(subjects)})"
+        else:
+            expert_prompt = ""
+
+        system_prompt = STUDY_TARGET_AND_KEYWORD_SYSTEM_PROMPT.format(expert_prompt)
+        user_prompt = STUDY_TARGET_AND_KEYWORD_USER_PROMPT.format(
+            NUM_KEYWORDS, NUM_KEYWORDS,
+            "NA" if not self.dandiset_name else self.dandiset_name,
+            "NA" if not self.dandiset_description else self.dandiset_description,
+            "NA" if not doi_title else doi_title,
+            "NA" if not doi_abstract else doi_abstract
+        )
+
+        response = self.openai_client.get_llm_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.0,
+            max_tokens=250
+        )
+        json_response = json.loads(response)
+        study_target = json_response["study_target"]
+        keywords = json_response["keywords"]
+        return study_target, keywords
+
+
     def get_study_target(self):
         subjects = self.crossref_client.get_subjects()
         
@@ -183,12 +219,13 @@ class DOIExtraction:
     
     def __str__(self):
         contributors: list[Contributor] = self.get_contributors()
-        study_target: list[str] = [self.get_study_target()]
-        keywords: list[str] = self.get_keywords(type=self.keyword_extraction_type)
+        study_target, keywords = self.get_study_target_and_keywords()
+        # study_target: list[str] = [self.get_study_target()]
+        # keywords: list[str] = self.get_keywords(type=self.keyword_extraction_type)
         
         return str({
             "contributors": contributors,
-            "study_target": study_target,
+            "study_target": [study_target],
             "keywords": keywords
         })
         
