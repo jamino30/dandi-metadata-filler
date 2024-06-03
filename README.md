@@ -1,5 +1,7 @@
 # Dandiset Metadata 'Filler'
 
+This tool is designed to automate the process of filling metadata for Dandisets and streamlines the creation and updating of metadata by leveraging associated DOIs/papers (or plain text input) and GPT-4. LLM-powered extraction chains ensure that the metadata is comprehensive and adheres to the required Dandi schema standards. The repository includes example scripts and documentation regarding the setup and execution of the metadata filling process, making it easier to manage and maintain accurate metadata on Dandi Archive.
+
 ### Example
 
 **Dandiset:** https://dandiarchive.org/dandiset/000409/draft
